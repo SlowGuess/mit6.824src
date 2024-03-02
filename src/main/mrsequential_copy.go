@@ -41,7 +41,7 @@ func main() {
 		"pg-metamorphosis.txt",
 		"pg-sherlock_holmes.txt",
 		"pg-tom_sawyer.txt",
-	}
+	} //*指定要处理的文件列表
 	//mapf, reducef := loadPlugin(os.Args[1])
 	// loadPlugin 无法在 Windows 中运行，这里手动 load 我们的 Map 和 Reduce 函数, 在 mrapps 文件夹的 wc.go 中
 	mapf := func(filename string, contents string) []mr.KeyValue {
@@ -53,8 +53,8 @@ func main() {
 
 		kva := []mr.KeyValue{}
 		for _, w := range words {
-			kv := mr.KeyValue{w, "1"}
-			kva = append(kva, kv)
+			kv := mr.KeyValue{w, "1"} // *将每个单词转换为键值对，值固定为 "1"
+			kva = append(kva, kv)     // *将每个单词放入kva中
 		}
 		return kva
 	}
@@ -70,18 +70,18 @@ func main() {
 	// pass it to Map,
 	// accumulate the intermediate Map output.
 	//
-	intermediate := []mr.KeyValue{}
-	for _, filename := range fileNameList {
+	intermediate := []mr.KeyValue{}         //*存取中间数据的数组
+	for _, filename := range fileNameList { //*读取所有文件
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
 		}
-		content, err := ioutil.ReadAll(file)
+		content, err := ioutil.ReadAll(file) //*读取文件内容
 		if err != nil {
 			log.Fatalf("cannot read %v", filename)
 		}
 		file.Close()
-		kva := mapf(filename, string(content))
+		kva := mapf(filename, string(content)) //*对每个文件执行 Map 函数，将生成的键值对添加到中间数据数组
 		intermediate = append(intermediate, kva...)
 	}
 
@@ -91,31 +91,30 @@ func main() {
 	// rather than being partitioned into NxM buckets.
 	//
 
-	sort.Sort(ByKey(intermediate))
+	sort.Sort(ByKey(intermediate)) //*对中间数据按键进行排序
 
-	oname := "mr-out-0"
+	oname := "mr-out-0" //*输出文件
 	ofile, _ := os.Create(oname)
 
 	//
 	// call Reduce on each distinct key in intermediate[],
 	// and print the result to mr-out-0.
 	//
-	i := 0
+	i := 0 //*执行reduce
 	for i < len(intermediate) {
-		j := i + 1
+		j := i + 1 //*寻找相同的键，直到找到不同的键或达到数组末尾
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
 		}
-		values := []string{}
+		values := []string{} //*收集相同键的所有值
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
 		}
-		output := reducef(intermediate[i].Key, values)
-
+		output := reducef(intermediate[i].Key, values) //*对每个不同的键执行 Reduce 函数，将输出写入输出文件
 		// this is the correct format for each line of Reduce output.
 		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
 
-		i = j
+		i = j //*移动到下一个不同的键
 	}
 
 	ofile.Close()

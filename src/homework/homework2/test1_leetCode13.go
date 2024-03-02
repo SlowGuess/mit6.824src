@@ -13,33 +13,28 @@ func RomanNumtoInt(s string) int {
 		"M": 1000,
 	}
 
-	//控制序列,保证输入罗马数字规范
-	//sequence :=map[string]int{
-	//	"I": 1,
-	//	"V": 2,
-	//	"X": 3,
-	//	"L": 4,
-	//	"C": 5,
-	//	"D": 6,
-	//	"M": 7,
-	//}
-
-	max, sum := 0, 0
+	l_num, sum := 0, 0
 	for i := len(s) - 1; i >= 0; i-- {
 		num := RomanNum[string(s[i])]
-		if max <= num {
+		if l_num <= num {
 			sum += num
-			max = num
+			l_num = num
 		} else {
+			left := l_num - num
+			if left == 4 || left == 9 || left == 40 || left == 90 || left == 400 || left == 900 {
+				sum -= num
+			} else {
+				fmt.Println("罗马数字不合规范")
+				return -1
+			}
 
-			sum -= num
 		}
 	}
 	return sum
 }
 
 func main() {
-	s := "MCMXCIV"
+	s := "IM"
 	fmt.Println(RomanNumtoInt(s))
 	//s1 :="IL"
 	//fmt.Println(RomanNumtoInt(s1))

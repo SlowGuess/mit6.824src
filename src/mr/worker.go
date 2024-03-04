@@ -71,6 +71,64 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 }
 
 func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
+	//存储每个文件的第job.ReduceID号分区的单词对
+	Reduce_partition := make([][]KeyValue, job.ReduceNumber)
+
+	// 按任务的ReduceID读取Map阶段输出的对应分区的文件
+	for i := 0; i < job.ReduceNumber; i++ {
+		MapFilename := fmt.Sprintf("worker-file%d-map-%03d-out.txt", i, job.ReduceID)
+		content, err := job.ReadFile(MapFilename)
+		if err != nil {
+			return err
+		}
+
+		//按行划分出每对单词和value
+		lines := strings.Split(content, "\n")
+		for _, line := range lines {
+			if line == "" {
+				//行为空，跳过即可
+				continue
+			}
+
+			//将单词和value划分开来
+			parts := strings.Fields(line)
+
+			if len(parts) != 2 {
+				//读取的格式有误，不是 word value 的形式
+				return fmt.Errorf("invalid format in map output file %s", MapFilename)
+			}
+
+			//将读取出的kv对放入对应分区号的二维KV对中,以便进行k路归并，为merge工作作准备
+			Reduce_partition[i] = append(Reduce_partition[i], KeyValue{Key: parts[0], Value: parts[1]})
+		}
+	}
+	//将所有该分区的单词对进行归并
+	mergeOut := MergeSort(Reduce_partition)
+
+	oname := fmt.Sprintf("mr-out-%d.txt", job.ReduceID) //*输出文件
+	ofile, _ := os.Create(oname)
+
+	// 执行 reduce 操作统计单词出现次数
+
+	i := 0 //*执行reduce
+	for i < len(mergeOut) {
+		j := i + 1 //*寻找相同的键，直到找到不同的键或达到数组末尾
+		for j < len(mergeOut) && mergeOut[j].Key == mergeOut[i].Key {
+			j++
+		}
+		values := []string{} //*收集相同键的所有值
+		for k := i; k < j; k++ {
+			values = append(values, mergeOut[k].Value)
+		}
+		output := reducef(mergeOut[i].Key, values) //*对每个不同的键执行 Reduce 函数，将输出写入输出文件
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", mergeOut[i].Key, output)
+
+		i = j //*移动到下一个不同的键
+	}
+
+	ofile.Close()
+	return nil
 
 }
 
@@ -88,9 +146,38 @@ func (job *Job) ReadFile(filename string) (string, error) {
 	return string(content), nil
 }
 
-// 多路归并，找最小值
-func findMinIndex(keyValueList2 [][]*KeyValue, indexList []int) int {
+// MergeSortTwo 将两个有序的KeyValue切片合并成一个有序的切片
+func MergeSortTwo(left, right []KeyValue) []KeyValue {
+	var result []KeyValue
+	i, j := 0, 0
 
+	for i < len(left) && j < len(right) {
+		if left[i].Key < right[j].Key {
+			result = append(result, left[i])
+			i++
+		} else {
+			result = append(result, right[j])
+			j++
+		}
+	}
+
+	result = append(result, left[i:]...)
+	result = append(result, right[j:]...)
+
+	return result
+}
+
+// MergeSort 对 k 个 KeyValue 切片进行归并排序
+func MergeSort(slices [][]KeyValue) []KeyValue {
+	if len(slices) <= 1 {
+		return slices[0]
+	}
+
+	mid := len(slices) / 2
+	left := MergeSort(slices[:mid])
+	right := MergeSort(slices[mid:])
+
+	return MergeSortTwo(left, right)
 }
 
 // 返回当前时间戳， 打印日志时候用

@@ -86,7 +86,7 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
 	Reduce_partition := make([][]KeyValue, job.ReduceNumber)
 
 	// 按任务的ReduceID读取Map阶段输出的对应分区的文件
-	for i := 0; i < job.ReduceNumber; i++ {
+	for i := 0; i < job.MapNumber; i++ {
 		MapFilename := fmt.Sprintf("worker-file%d-map-%03d-out.txt", i, job.ReduceID)
 		content, err := job.ReadFile(MapFilename)
 		if err != nil {
@@ -231,10 +231,15 @@ func (job *Job) DoJob(mapf func(string, string) []KeyValue, reducef func(string,
 	case MapJob:
 		if err = job.DoMapJob(mapf); err != nil {
 			fmt.Println("DoMapJob_error ", err)
+		} else if err == nil {
+			fmt.Printf("worker:%v DoMapJob_succeess ", os.Getpid())
 		}
+
 	case ReduceJob:
 		if err = job.DoReduceJob(reducef); err != nil {
 			fmt.Println("DoReduceJob_error ", err)
+		} else if err == nil {
+			fmt.Printf("worker:%v DoReduceJob_succeess ", os.Getpid())
 		}
 	}
 	// 成功做完修改状态
@@ -259,7 +264,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		}
 		// 任务都做完了，停止循环
 		if job.FetchCount == 0 {
-			fmt.Println(logTime()+WorkerLogPrefix+"任务都做完了，worker:%v退出", os.Getpid())
+			fmt.Printf(logTime()+WorkerLogPrefix+"任务都做完了，worker:%v退出", os.Getpid())
 			break
 		}
 		// 做任务

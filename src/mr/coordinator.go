@@ -24,11 +24,17 @@ type Coordinator struct {
 	JobListMutex  sync.Mutex
 }
 
+// Job互斥锁
+type JobMutex struct {
+	sync.Mutex
+}
+
 type Job struct {
 	//static information
 	FileName     string //任务文件名
 	ListIndex    int    //在任务列表中的下标
 	ReduceID     int    // reduce 任务号  从0-(N-1) 和上面一个属性重复了
+	MapNumber    int    //Map数量个数
 	ReduceNumber int    //Reduce数量个数
 	JobType      int    //任务类型 map or reduce
 
@@ -38,7 +44,7 @@ type Job struct {
 	FirstStartTime int64 // 最终完成的时间
 	FetchCount     int   // 任务分配次数，用于统计信息
 
-	FileMutex sync.Mutex // 用于保护文件资源的锁
+	FileMutex JobMutex // 用于保护文件资源的锁
 }
 
 const (
@@ -179,6 +185,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 	// Your code here.
 	c.InitCoordinator(files, nReduce)
+	c.MapNumber = len(files)
 	go c.Background()
 	c.server()
 	return &c
@@ -235,6 +242,7 @@ func (m *Coordinator) generateReduceMap() {
 			ListIndex:    i,
 			ReduceID:     i,
 			ReduceNumber: m.ReduceNumber,
+			MapNumber:    m.MapNumber,
 			JobType:      ReduceJob,
 		})
 	}
@@ -258,6 +266,7 @@ func (m *Coordinator) initMapJob() {
 			JobType:      MapJob,
 			FileName:     file,
 			ListIndex:    i,
+			MapNumber:    m.MapNumber,
 			ReduceNumber: m.ReduceNumber,
 		})
 	}

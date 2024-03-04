@@ -57,14 +57,25 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 
 		//将map工作完成的内容放在本地，供reduce工作使用
 		map_filename := fmt.Sprintf("worker-file%d-map-%03d-out.txt", job.ListIndex, i)
+
+		// 加锁保护文件写入
+		job.FileMutex.Lock()
+		defer job.FileMutex.Unlock()
+
 		file, err := os.OpenFile(map_filename, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, os.ModePerm)
 		if err != nil {
 			return err
 		}
+
 		defer file.Close()
+
 		// 写入文件
 		for _, kv := range partition[i] {
-			fmt.Fprintf(file, "%s %s\n", kv.Key, kv.Value)
+			_, err := fmt.Fprintf(file, "%s %s\n", kv.Key, kv.Value)
+			if err != nil {
+				fmt.Println("写入分区%v文件有误", i)
+				return err
+			}
 		}
 	}
 	return nil
@@ -106,10 +117,21 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
 	mergeOut := MergeSort(Reduce_partition)
 
 	oname := fmt.Sprintf("mr-out-%d.txt", job.ReduceID) //*输出文件
-	ofile, _ := os.Create(oname)
+
+	// 加锁保护文件写入
+	job.FileMutex.Lock()
+	defer job.FileMutex.Unlock() // 在函数退出时确保锁会被释放
+
+	ofile, err := os.Create(oname)
+	if err != nil {
+		fmt.Println("创建输出文件mr-out失败")
+		return err
+	}
+
+	// defer 语句确保锁会被释放
+	defer ofile.Close()
 
 	// 执行 reduce 操作统计单词出现次数
-
 	i := 0 //*执行reduce
 	for i < len(mergeOut) {
 		j := i + 1 //*寻找相同的键，直到找到不同的键或达到数组末尾
@@ -122,12 +144,15 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
 		}
 		output := reducef(mergeOut[i].Key, values) //*对每个不同的键执行 Reduce 函数，将输出写入输出文件
 		// this is the correct format for each line of Reduce output.
-		fmt.Fprintf(ofile, "%v %v\n", mergeOut[i].Key, output)
+		_, err := fmt.Fprintf(ofile, "%v %v\n", mergeOut[i].Key, output)
+		if err != nil {
+			fmt.Println("写入mr-out失败")
+			return err
+		}
 
 		i = j //*移动到下一个不同的键
 	}
 
-	ofile.Close()
 	return nil
 
 }
@@ -186,7 +211,7 @@ func logTime() string {
 }
 
 func CallFetchJob() JobFetchResp {
-	req := JobFetchReq{}
+	req := JobFetchReq{os.Getpid()}
 	resp := JobFetchResp{}
 	call("Coordinator.JobFetch", &req, &resp)
 	//fmt.Printf(WorkerLogPrefix+"CallFetchJob job resp %+v\n", resp)
@@ -234,7 +259,7 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		}
 		// 任务都做完了，停止循环
 		if job.FetchCount == 0 {
-			fmt.Println(logTime() + WorkerLogPrefix + "任务都做完了，worker退出")
+			fmt.Println(logTime()+WorkerLogPrefix+"任务都做完了，worker:%v退出", os.Getpid())
 			break
 		}
 		// 做任务

@@ -37,7 +37,8 @@ type Job struct {
 	StartTime      int64 //任务的分配时间[初始为0]，如果下次检查是否可分配时超过2s，就当失败处理，重新分配
 	FirstStartTime int64 // 最终完成的时间
 	FetchCount     int   // 任务分配次数，用于统计信息
-	// 规定： map产生的中间文件的名字格式是  输入文件名_分区号    reduce 产生的最终文件是 mr-out-reduce任务号
+
+	FileMutex sync.Mutex // 用于保护文件资源的锁
 }
 
 const (
@@ -65,6 +66,7 @@ func toJsonString(inter interface{}) string {
 
 type JobFetchReq struct {
 	// 不需要有东西。如果服务端需要记录客户端信息，可以传入客户端id等信息，微服务mesh层应该做的事情。
+	ClientID int
 }
 
 type JobFetchResp struct {
@@ -111,7 +113,7 @@ func (m *Coordinator) JobFetch(req *JobFetchReq, resp *JobFetchResp) error {
 				job.FirstStartTime = CurrentTime
 			}
 			// 赋值给resp，即分发给请求源:客户端
-			fmt.Printf(logTime()+MasterLogPrefix+"—————————————— 分发出任务:%v \n", job.ListIndex)
+			fmt.Printf(logTime()+MasterLogPrefix+"—————————————— 给用户%v分发出任务:%v \n", req.ClientID, job.ListIndex)
 			resp.Job = *job
 			return nil
 		}

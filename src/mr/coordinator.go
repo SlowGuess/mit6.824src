@@ -24,11 +24,6 @@ type Coordinator struct {
 	JobListMutex  sync.Mutex
 }
 
-// Job互斥锁
-type JobMutex struct {
-	sync.Mutex
-}
-
 type Job struct {
 	//static information
 	FileName     string //任务文件名
@@ -44,7 +39,6 @@ type Job struct {
 	FirstStartTime int64 // 最终完成的时间
 	FetchCount     int   // 任务分配次数，用于统计信息
 
-	FileMutex JobMutex // 用于保护文件资源的锁
 }
 
 const (

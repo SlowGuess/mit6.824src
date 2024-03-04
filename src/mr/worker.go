@@ -58,10 +58,6 @@ func (job *Job) DoMapJob(mapf func(string, string) []KeyValue) error {
 		//将map工作完成的内容放在本地，供reduce工作使用
 		map_filename := fmt.Sprintf("worker-file%d-map-%03d-out.txt", job.ListIndex, i)
 
-		// 加锁保护文件写入
-		job.FileMutex.Lock()
-		defer job.FileMutex.Unlock()
-
 		file, err := os.OpenFile(map_filename, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, os.ModePerm)
 		if err != nil {
 			return err
@@ -117,10 +113,6 @@ func (job *Job) DoReduceJob(reducef func(string, []string) string) error {
 	mergeOut := MergeSort(Reduce_partition)
 
 	oname := fmt.Sprintf("mr-out-%d.txt", job.ReduceID) //*输出文件
-
-	// 加锁保护文件写入
-	job.FileMutex.Lock()
-	defer job.FileMutex.Unlock() // 在函数退出时确保锁会被释放
 
 	ofile, err := os.Create(oname)
 	if err != nil {

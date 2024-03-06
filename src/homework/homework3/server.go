@@ -5,7 +5,6 @@ import (
 	"log"
 	"net"
 	"net/rpc"
-	"os"
 	"sync"
 	"time"
 )
@@ -90,31 +89,37 @@ func main() {
 		log.Fatal("listen error:", err)
 	}
 
-	ticker := time.NewTicker(time.Second * 1) //创建一个定时器，用于10s内无用户索取则关闭
+	ticker := time.NewTicker(time.Second * 10) //创建一个定时器，用于10s内无用户索取则关闭
+	defer ticker.Stop()
 
-	for i := 1; i <= 10; i++ {
+	go func() {
+		//其他业务逻辑
+		conn, err := listener.Accept()
+		if err != nil {
+			// 一般是网络断开或连接超时
+			log.Fatal("accept error:", err)
+		}
+		if conn != nil { // 有客户连接
+			fmt.Println("收到新连接,重新计时")
+
+			// 重置定时器
+			ticker.Stop()
+			ticker = time.NewTicker(time.Second * 10)
+
+			go func() {
+				defer conn.Close()
+				rpc.ServeConn(conn)
+			}()
+		}
+	}()
+
+	for {
 		select {
 		case <-ticker.C:
 			// 10s 内没有客户端来索要，结束服务端进程
-			fmt.Printf("当前秒数:%d\n", i)
-
-		default:
-
-			conn, err := listener.Accept()
-			if err != nil {
-				// 一般是网络断开或连接超时
-				log.Fatal("accept error:", err)
-			}
-			if conn != nil { // 有客户连接
-				i = 1 // 重置计时器，因为有新的客户端连接
-				fmt.Println("收到新连接,重新计时")
-				go func() {
-					defer conn.Close()
-					rpc.ServeConn(conn)
-				}()
-			}
+			log.Println("10秒内无客户端连接，服务端进程结束")
+			return
 		}
 	}
-	fmt.Println("10秒内无客户端连接，服务端进程结束")
-	os.Exit(0)
+
 }

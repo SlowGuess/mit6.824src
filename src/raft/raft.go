@@ -122,6 +122,9 @@ const (
 // GlobalID 全局自增ID，需要原子性自增，用于debug
 var GlobalID = int64(100)
 
+// count用于统计一个candidate选举中赞成的个数
+var count = int(0)
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
@@ -223,11 +226,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// todo your code
 	if int(args.ServerNumber) == rf.me {
 		reply.Agree = true
+		rf.VotedFor = int32(rf.me)
 		reply.Term = rf.Term
 		return
 	}
 
-	fmt.Print(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, " 号机器收到 ", args.ServerNumber, " 号机器的投票请求, 自己的任期是 ", rf.Term, " 请求中的任期是", args.Term, " 自己的VotedFor", rf.VotedFor, " LastLogIndex:", args.LastLogIndex, " LastLogTerm:", args.LastLogTerm)
+	Trace(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, " 号机器收到 ", args.ServerNumber, " 号机器的投票请求, 自己的任期是 ", rf.Term, " 请求中的任期是", args.Term, " 自己的VotedFor", rf.VotedFor, " LastLogIndex:", args.LastLogIndex, " LastLogTerm:", args.LastLogTerm)
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	//无论是什么身份，遇到任期比自己大的都跟随
 	if args.Term > rf.Term {
@@ -239,28 +243,29 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 		//赞成投票
 		reply.Agree = true
-	} else if args.Term == rf.Term {
+		rf.VotedFor = args.ServerNumber
+
+		Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
+		return
+	}
+	if args.Term == rf.Term {
 		//任期相等时只有follower节点没投票时才会赞成
 		if rf.Role == RoleFollower {
 			if rf.VotedFor == InitVoteFor {
 				reply.Term = rf.Term
 				rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 				reply.Agree = true
-			}
-		} else {
-			//任期相等时leader和candidate都会反对
-			reply.Term = rf.Term
-			reply.Agree = false
-		}
-	} else {
-		//任期小于当前自己的任期，任何角色都会反对
-		reply.Term = rf.Term
-		reply.Agree = false
-	}
-	// 论文原文 If votedFor is null or candidateId, and candidate’s log is at least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
-	// todo your code
+				rf.VotedFor = args.ServerNumber
 
-	Success("%+v号机器回复%+v号机器选举，结果是:%+v", rf.me, args.ServerNumber, reply.Agree)
+				Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
+				return
+			}
+		}
+	}
+	//其他情况都会反对
+	reply.Term = rf.Term
+	reply.Agree = false
+	Warning("%+v号机器反对了%+v号机器选举", rf.me, args.ServerNumber)
 }
 
 // AsyncBatchSendRequestVote 非领导者并行发送投票请求，收到响应后进行处理
@@ -268,6 +273,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 func (rf *Raft) AsyncBatchSendRequestVote() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
+	Info("candidate:%+v 开始发起选举投票,当前任期为:%+v", rf.me, rf.Term)
 
 	for index, _ := range rf.peers {
 		//如果是已经表示赞成自己的节点，则不用再向其发送
@@ -279,7 +286,7 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 			ServerNumber: int32(rf.me),
 		}
 		reply := &RequestVoteReply{}
-		fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器发送选主请求, 发给", index, " 号  自己的信息是:", fmt.Sprintf("%+v", *args))
+		Trace("%+v号机器发送选主请求, 发给%v号,自己的信息是:%v", rf.me, index, args)
 		go func(i int) {
 			if flag := rf.sendRequestVote(i, args, reply); !flag {
 				//  网络原因，需要重发，这里先不实现
@@ -300,21 +307,25 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	if req.Term > rf.Term {
 		rf.convert2Follower(req.Term)
 		//此时不需要重置选举计时器,也无需反馈信息
-	} else {
-		rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
-		count := 0
-		for i := 0; i < len(rf.peers); i++ {
-			if rf.PeersVoteGranted[i] == true {
-				count++
-			}
-		}
-		if count > len(rf.peers)/2 { // 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
-			rf.convert2Leader()
-			go rf.backupGroundRPCCycle()
-		}
-
+		Warning("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，选择跟随,自己的Role为:%+v", rf.me, req.ServerNumber, reply.Agree, req.Term, rf.Role)
+		return
 	}
-	fmt.Println(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, "号机器收到 ", reply.ServerNumber, " 号机器的投票回复，", reply.Agree, " 自己的Role:", rf.Role)
+
+	Success("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，当选为leader,自己的Role:%+v", rf.me, req.ServerNumber, reply.Agree, req.Term, rf.Role)
+
+	rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
+	count = 0
+	for i := 0; i < len(rf.peers); i++ {
+		if rf.PeersVoteGranted[i] == true {
+			count++
+		}
+	}
+	if count > len(rf.peers)/2 { // 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
+		rf.convert2Leader()
+		go rf.backupGroundRPCCycle()
+		Success("%+v号机器收到%+v号机器的投票回复，任期为%+v，当选为leader,自己的Role:%+v", rf.me, req.ServerNumber, req.Term, rf.Role)
+	}
+
 }
 
 // 启动心跳后台任务。只有 ledaer 才会发心跳
@@ -341,9 +352,13 @@ func (rf *Raft) backupGroundRPCCycle() {
 func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	if rf.Role != RoleLeader {
 		return
 	}
+
+	Info("leader：%+v 开始发送心跳，任期为：%+v", rf.me, rf.Term)
+
 	for index, _ := range rf.peers {
 		if index == rf.me {
 			continue // 跳过自己
@@ -398,6 +413,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 
 		//回应心跳
 		reply.Success = true
+		rf.VotedFor = req.ServerNumber
 	} else {
 		//收到任期小于自己，包反对
 		reply.Term = rf.Term

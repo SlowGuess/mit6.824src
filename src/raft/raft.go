@@ -323,6 +323,7 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	}
 	if count > len(rf.peers)/2 { // 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
 		rf.convert2Leader()
+		rf.RequestAppendEntriesTimeTicker = time.NewTicker(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
 		go rf.backupGroundRPCCycle()
 		Success("%+v号机器收到%+v号机器的投票回复，任期为%+v，当选为leader,自己的Role:%+v", rf.me, reply.ServerNumber, reply.Term, rf.Role)
 	}
@@ -402,7 +403,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	defer rf.mu.Unlock()
 
 	reply.ServerNumber = int32(rf.me)
-	fmt.Print(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, " 号机器收到 ", req.ServerNumber, " 号机器的心跳信息, 自己的任期是 ", rf.Term, " 请求中的任期是", req.Term, " 自己的VotedFor", rf.VotedFor)
+	Trace("%+v号机器收到%+v号机器的心跳信息, 自己的任期是%+v请求中的任期是%+v自己的VotedFor%+v", rf.me, req.ServerNumber, rf.Term, req.Term, rf.VotedFor)
 
 	//收到任期大于等于自己，则都选择跟随，这里2A实验 candidate与follower情况相同，不作分类,在之后实验可能需要修改
 	if req.Term >= rf.Term {

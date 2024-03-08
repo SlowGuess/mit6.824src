@@ -279,9 +279,14 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 
 	for index, _ := range rf.peers {
 		//如果是已经表示赞成自己的节点，则不用再向其发送
-		if rf.PeersVoteGranted[index] {
+		//if rf.PeersVoteGranted[index] {
+		//	continue
+		//}
+
+		if rf.me == index {
 			continue
 		}
+
 		args := &RequestVoteArgs{
 			Term:         rf.Term,
 			ServerNumber: int32(rf.me),
@@ -323,9 +328,9 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	}
 	if count > len(rf.peers)/2 { // 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
 		rf.convert2Leader()
-		rf.RequestAppendEntriesTimeTicker = time.NewTicker(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
+		rf.RequestAppendEntriesTimeTicker.Reset(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
 		go rf.backupGroundRPCCycle()
-		Success("%+v号机器收到%+v号机器的投票回复，任期为%+v，当选为leader,自己的Role:%+v", rf.me, reply.ServerNumber, reply.Term, rf.Role)
+		Info("%+v号机器任期为%+v，当选为leader,自己的Role:%+v", rf.me, rf.Term, rf.Role)
 	}
 
 }
@@ -340,7 +345,7 @@ func (rf *Raft) backupGroundRPCCycle() {
 			switch atomic.LoadInt32(&rf.Role) {
 			case RoleLeader:
 				rf.AsyncBatchSendRequestAppendEntries()
-				//发送后立即重置心跳定时器
+				//发送后立即重置心跳定时器 //也可以不重置，在实验中影响不大
 				rf.RequestAppendEntriesTimeTicker.Reset(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
 			default:
 				// 不是leader了，结束后台线程
@@ -537,7 +542,7 @@ func (rf *Raft) ticker() {
 				return
 			}
 			switch rf.Role {
-			case RoleFollower:
+			case RoleFollower, RoleCandidate:
 				// 转换成 candidate 并且 term+1
 				rf.Role = RoleCandidate
 				rf.Term++
@@ -546,12 +551,6 @@ func (rf *Raft) ticker() {
 				rf.PeersVoteGranted[rf.me] = true
 				go rf.AsyncBatchSendRequestVote()
 
-			case RoleCandidate: //和follower相同
-				// term + 1 , 额外的线程去做rpc
-				rf.Term++
-				rf.PeersVoteGranted = make([]bool, len(rf.peers))
-				rf.PeersVoteGranted[rf.me] = true
-				go rf.AsyncBatchSendRequestVote()
 			case RoleLeader:
 				// 不用做
 			}
@@ -583,6 +582,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
 
 	rf.RequestVoteTimeTicker = time.NewTicker(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
+	rf.RequestAppendEntriesTimeTicker = time.NewTicker(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
 
 	fmt.Println(rf.me, "号机器的选举循环周期是", rf.RequestVoteDuration.Milliseconds(),
 		"毫秒", "  rpc周期是", rf.RequestAppendEntriesDuration.Milliseconds(), "毫秒")

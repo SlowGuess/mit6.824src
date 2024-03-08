@@ -231,7 +231,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	Trace(time.Now().Format("2006/01/02 15:04:05.000"), "  ", rf.me, " 号机器收到 ", args.ServerNumber, " 号机器的投票请求, 自己的任期是 ", rf.Term, " 请求中的任期是", args.Term, " 自己的VotedFor", rf.VotedFor, " LastLogIndex:", args.LastLogIndex, " LastLogTerm:", args.LastLogTerm)
+	Trace("%+v号机器收到%+v号机器的投票请求, 自己的任期是%+v请求中的任期是%+v自己的VotedFor:%+v      LastLogIndex:%+vLastLogTerm:%+v",
+		rf.me, args.ServerNumber, rf.Term, args.Term, rf.VotedFor, args.LastLogIndex, args.LastLogTerm)
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	//无论是什么身份，遇到任期比自己大的都跟随
 	if args.Term > rf.Term {
@@ -304,14 +305,14 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	defer rf.mu.Unlock()
 
 	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
-	if req.Term > rf.Term {
-		rf.convert2Follower(req.Term)
+	if reply.Term > rf.Term {
+		rf.convert2Follower(reply.Term)
 		//此时不需要重置选举计时器,也无需反馈信息
-		Warning("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，选择跟随,自己的Role为:%+v", rf.me, req.ServerNumber, reply.Agree, req.Term, rf.Role)
+		Warning("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，选择跟随,自己的Role为:%+v", rf.me, reply.ServerNumber, reply.Agree, reply.Term, rf.Role)
 		return
 	}
 
-	Success("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，当选为leader,自己的Role:%+v", rf.me, req.ServerNumber, reply.Agree, req.Term, rf.Role)
+	Success("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，自己的Role:%+v", rf.me, reply.ServerNumber, reply.Agree, reply.Term, rf.Role)
 
 	rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
 	count = 0
@@ -323,7 +324,7 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	if count > len(rf.peers)/2 { // 如果自己被投了超过1/2票，那么转换成 leader, 然后启动后台 backupGroundRPCCycle 心跳线程
 		rf.convert2Leader()
 		go rf.backupGroundRPCCycle()
-		Success("%+v号机器收到%+v号机器的投票回复，任期为%+v，当选为leader,自己的Role:%+v", rf.me, req.ServerNumber, req.Term, rf.Role)
+		Success("%+v号机器收到%+v号机器的投票回复，任期为%+v，当选为leader,自己的Role:%+v", rf.me, reply.ServerNumber, reply.Term, rf.Role)
 	}
 
 }

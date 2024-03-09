@@ -101,6 +101,20 @@ type Raft struct {
 	RequestVoteDuration            time.Duration
 	RequestAppendEntriesTimeTicker *time.Ticker // rpc循环计时器，leader才有
 	RequestAppendEntriesDuration   time.Duration
+
+	//2B
+	Log         []LogEntry // 日志数组   在语义上第一个下标为1而不是0
+	CommitIndex int        // 已经提交的最大的日志index， 初始化为0
+
+	ApplyCh     chan ApplyMsg // 检测程序所用，提交之后的日志发送到这里
+	LastApplied int           // 最后一个被应用到[完成提交]状态机的日志下标, 实验2B用不到
+
+	NextIndex  []int // leader才有意义。对于各个raft节点，下一个需要接收的日志条目的索引，初始化为自己最后一个log的下标+1
+	MatchIndex []int // leader才有意义。对于各个raft节点，已经复制过去的最高的日志下标【正常是从1开始，所以这里初始化是0】
+
+	// 实验2D
+	LastIncludedTerm  int64 // 最后快照保存的term
+	LastIncludedIndex int   // 最后快照保存的index, 初始化为0. 之后正常从1开始
 }
 
 const (
@@ -121,9 +135,6 @@ const (
 
 // GlobalID 全局自增ID，需要原子性自增，用于debug
 var GlobalID = int64(100)
-
-// count用于统计一个candidate选举中赞成的个数
-var count = int(0)
 
 // return currentTerm and whether this server
 // believes it is the leader.
@@ -320,7 +331,7 @@ func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteRe
 	Success("%+v号机器收到%+v号机器的投票回复%+v，任期为%+v，自己的Role:%+v", rf.me, reply.ServerNumber, reply.Agree, reply.Term, rf.Role)
 
 	rf.PeersVoteGranted[reply.ServerNumber] = reply.Agree
-	count = 0
+	count := 0
 	for i := 0; i < len(rf.peers); i++ {
 		if rf.PeersVoteGranted[i] == true {
 			count++
@@ -371,8 +382,12 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 			continue // 跳过自己
 		}
 		args := &AppendEntriesRequest{
-			Term:         rf.Term,
-			ServerNumber: int32(rf.me),
+			Term:              rf.Term,
+			ServerNumber:      int32(rf.me),
+			PrevLogIndex:      rf.NextIndex[index] - 1,
+			PrevLogTerm:       rf.Log[rf.NextIndex[index]-1].Term,
+			LeaderCommitIndex: rf.CommitIndex,
+			Entries:           rf.Log[rf.NextIndex[index]-1:],
 		}
 		reply := &AppendEntriesReply{}
 		go func(i int) {
@@ -398,6 +413,30 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		rf.convert2Follower(args.Term)
 		//此时需要重置选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
+		return
+	}
+
+	//如果日志被复制超过1/2个节点的话，执行提交
+	count := 0
+	if reply.Success {
+		for _, matchIndex := range rf.MatchIndex {
+			if matchIndex <= reply.MatchIndex {
+				count++
+			}
+		}
+	}
+	oldCommitIndex := rf.CommitIndex
+	if count > len(rf.peers)/2 {
+		rf.CommitIndex = max(rf.CommitIndex+1, reply.MatchIndex)
+	}
+
+	for i := oldCommitIndex; i < rf.CommitIndex; i++ {
+		//if 需要提交的时候
+		rf.ApplyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.Log[i-1].Command,
+			CommandIndex: rf.CommitIndex,
+		}
 	}
 
 }
@@ -502,6 +541,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	if rf.Role != RoleLeader {
+		return -1, -1, false
+	}
+	//是leader
+	rf.Log = append(rf.Log, LogEntry{
+		Term:    rf.Term,
+		Index:   len(rf.Log),
+		Command: command,
+	})
 
 	return index, term, isLeader
 }
@@ -579,6 +627,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.Term = InitTerm
 	rf.Role = RoleFollower
 	rf.VotedFor = InitVoteFor
+	rf.ApplyCh = applyCh
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
 
 	rf.RequestVoteTimeTicker = time.NewTicker(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))

@@ -381,10 +381,12 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 		if index == rf.me {
 			continue // 跳过自己
 		}
+
 		args := &AppendEntriesRequest{
-			Term:              rf.Term,
-			ServerNumber:      int32(rf.me),
-			PrevLogIndex:      rf.NextIndex[index] - 1,
+			Term:         rf.Term,
+			ServerNumber: int32(rf.me),
+
+			PrevLogIndex:      max(rf.NextIndex[index]-1, 0),
 			PrevLogTerm:       rf.Log[rf.NextIndex[index]-1].Term,
 			LeaderCommitIndex: rf.CommitIndex,
 			Entries:           rf.Log[rf.NextIndex[index]-1:],
@@ -460,6 +462,23 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		//回应心跳
 		reply.Success = true
 		rf.VotedFor = req.ServerNumber
+
+		//————————————————进行日志处理
+		//先检查日志一致性，比较日志的最后一个条目和leader心跳信息中携带日志条目进行比较
+		if rf.Log[req.PrevLogIndex].Term != req.PrevLogTerm {
+			//上一个任期不一致，则拒绝
+			reply.Success = false
+		}
+		for _, log := range req.Entries {
+			//若在心跳信息中包含该日志
+			if rf.Log[req.PrevLogIndex+1].Index == log.Index {
+				//并且它们的索引和任期相同，则说明是同一条日志
+				if rf.Log[req.PrevLogIndex+1].Term == log.Term {
+
+				}
+			}
+		}
+
 	} else {
 		//收到任期小于自己，包反对
 		reply.Term = rf.Term
@@ -547,8 +566,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//是leader
 	rf.Log = append(rf.Log, LogEntry{
 		Term:    rf.Term,
-		Index:   len(rf.Log),
+		Index:   len(rf.Log) + 1,
 		Command: command,
+		ID:      atomic.AddInt64(&GlobalID, 1),
 	})
 
 	return index, term, isLeader

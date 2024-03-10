@@ -396,36 +396,23 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 			continue // 跳过自己
 		}
 
-		////处理长度越界
-		var entries []LogEntry
-		var prevLogTerm int64
-		var prevLogIndex int
-		Error("prevLogIndex:%+v", rf.NextIndex[index]-1)
-		prevLogIndex = rf.NextIndex[index] - 1
-		if prevLogIndex == 0 {
-			prevLogTerm = 0
-			if len(rf.Log) > 0 {
-				entries = rf.Log[0:]
-			} else {
-				entries = []LogEntry{}
-			}
-		} else {
-			Error("prevLogTerm:%+v", rf.Log[prevLogIndex-1].Term)
-			prevLogTerm = rf.Log[prevLogIndex-1].Term
-			entries = rf.Log[prevLogIndex:]
-		}
-
 		args := &AppendEntriesRequest{
 			Term:         rf.Term,
 			ServerNumber: int32(rf.me),
 
-			PrevLogIndex:      rf.NextIndex[index] - 1, // todo 这个不用判断，因为NextIndex是从1开始的
-			PrevLogTerm:       prevLogTerm,             // todo 判断长度
+			PrevLogIndex:      rf.NextIndex[index] - 1,
 			LeaderCommitIndex: rf.CommitIndex,
-			Entries:           entries, // todo 判断长度
 		}
+		if len(rf.Log) != 0 {
+			args.Entries = rf.Log[rf.NextIndex[index]-1:]
+		}
+		if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Log) {
+			args.PrevLogTerm = rf.Log[args.PrevLogIndex-1].Term
+		}
+
 		reply := &AppendEntriesReply{}
 		go func(i int) {
+			Trace("%+v号机器向%+v号机器发送心跳，args信息：%+v", rf.me, i, *args)
 			//util.Trace(fmt.Sprint(rf.me, "号机器开始发送心跳给", i, "号机器, 任期为 ", rf.Term, "  req为", fmt.Sprintf("%+v %s", *args, logPrint)))
 			if flag := rf.sendRPCAppendEntriesRequest(i, args, reply); !flag {
 				//  网络原因，需要重发
@@ -453,7 +440,6 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 
 	count := 0
 	if reply.Success {
-
 		for i, matchIndex := range rf.MatchIndex {
 			if i == rf.me { //跳过统计自己
 				continue
@@ -465,15 +451,12 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		}
 		//处理matchIndex和nextIndex
 		rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
-		//有写入，nextIndex才++
-		if reply.HasReplica {
-			rf.NextIndex[reply.ServerNumber]++
-		}
+		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
 
 	} else {
 		//错误处理,nextIndex指针回退一格（可优化如二分查找，这里简单实现）
-		rf.NextIndex[reply.ServerNumber]--
 		rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
+		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
 	}
 
 	oldCommitIndex := rf.CommitIndex
@@ -481,13 +464,12 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	//如果日志被复制超过1/2个节点的话，执行提交，这里由于跳过了自己，默认count多+1
 	//Error("count:%+v,半数:%+v",count,len(rf.peers)/2)
 	if count+1 > len(rf.peers)/2 {
-		rf.CommitIndex = max(rf.CommitIndex+1, reply.MatchIndex)
-		//判断下标是否越界
-		if rf.CommitIndex > len(rf.Log) {
-			rf.CommitIndex = len(rf.Log)
+		if rf.CommitIndex+1 <= len(rf.Log) {
+			rf.CommitIndex = max(rf.CommitIndex+1, reply.MatchIndex)
 		}
+
 	}
-	Error("oldcommitIndex:%+v,commitIndex:%+v!!!", oldCommitIndex, rf.CommitIndex)
+	//Error("oldcommitIndex:%+v,commitIndex:%+v!!!", oldCommitIndex, rf.CommitIndex)
 	for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
 		//if 需要提交的时候
 		rf.ApplyCh <- ApplyMsg{
@@ -505,7 +487,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	defer rf.mu.Unlock()
 
 	reply.ServerNumber = int32(rf.me)
-	Trace("%+v号机器收到%+v号机器的心跳信息, 自己的任期是%+v请求中的任期是%+v自己的VotedFor%+v", rf.me, req.ServerNumber, rf.Term, req.Term, rf.VotedFor)
+	Trace("%+v号机器收到%+v号机器的心跳信息, 自己的任期是%+v请求中的任期是%+v自己的VotedFor%+v,日志信息为:%+v", rf.me, req.ServerNumber, rf.Term, req.Term, rf.VotedFor, *req)
 
 	// todo 这个 else 可以放到最前面，并直接 return ， 另外可以加一条打印
 	//收到任期小于自己，包反对
@@ -518,124 +500,95 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 
 	//收到任期大于等于自己，则都选择跟随，这里2A实验 candidate与follower情况相同，不作分类,在之后实验可能需要修改
-	if req.Term >= rf.Term {
-		rf.convert2Follower(req.Term)
-		reply.Term = rf.Term
+	rf.convert2Follower(req.Term)
+	reply.Term = rf.Term
 
-		//注意这里需要重置自己的选举计时器
-		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
+	//注意这里需要重置自己的选举计时器
+	rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 
-		//回应心跳
+	//回应心跳
+	reply.Success = true
+	rf.VotedFor = req.ServerNumber
+
+	//————————————————进行日志处理
+	//初始没有日志的情况，prevLogIndex==0
+	if req.PrevLogIndex == 0 && len(rf.Log) == 0 {
 		reply.Success = true
-		rf.VotedFor = req.ServerNumber
-
-		//————————————————进行日志处理
-		//上一个日志匹配的index等于0的情况
-		if req.PrevLogIndex == 0 {
-
-			reply.Success = true
-			reply.HasReplica = true
-
-			if len(req.Entries) == 0 {
-				//如果leader给的日志为空
-				reply.HasReplica = false
-				reply.MatchIndex = 0
-				Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v", rf.me, req.ServerNumber, reply.Success)
-				return
-			}
-
-			//直接复制
-			for _, pojo := range req.Entries {
-				// 不要重复添加
-				if pojo.Index > len(rf.Log) {
-					// 不应该取 req 日志中的 index， 要重新弄成自己的index
-					rf.Log = append(rf.Log, LogEntry{
-						Term:    pojo.Term,
-						Index:   len(rf.Log) + 1, // index语义从1开始
-						Command: pojo.Command,
-						ID:      pojo.ID,
-					})
-				}
-
-			}
-			//更改commitIndex
-			rf.CommitIndex = req.LeaderCommitIndex
-			//提交日志
-			for i := 0; i <= rf.CommitIndex-1; i++ {
-				rf.ApplyCh <- ApplyMsg{
-					CommandValid: true,
-					Command:      rf.Log[i].Command,
-					CommandIndex: rf.Log[i].Index,
-				}
-				rf.LastApplied = rf.CommitIndex
-			}
-
-			reply.MatchIndex = len(req.Entries)
-			Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v", rf.me, req.ServerNumber, reply.Success)
-			return
-		}
-		// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
-		// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-		if rf.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
-			// todo 正确赋值 reply.MatchIndex
-			reply.MatchIndex = req.PrevLogIndex - 1
-			if reply.MatchIndex < 0 {
-				reply.MatchIndex = 0
-			}
-			reply.Success = false
-			reply.HasReplica = false
-			Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
-			return
-		}
-
-		// todo 设置一下 reply.MatchIndex
 		reply.MatchIndex = len(req.Entries)
-		// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
-		// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+		for _, pojo := range req.Entries {
+			rf.Log = append(rf.Log, LogEntry{
+				Term:    pojo.Term,
+				Index:   len(rf.Log) + 1, // index语义从1开始
+				Command: pojo.Command,
+				ID:      pojo.ID,
+			})
+			reply.HasReplica = true
+		}
+		Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为:%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
+		return
+	}
+	// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
+	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+	if req.PrevLogIndex > len(rf.Log) || rf.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
+		// todo 正确赋值 reply.MatchIndex
+		reply.MatchIndex = len(rf.Log)
+
+		reply.Success = false
+		reply.HasReplica = false
+		Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
+		return
+	}
+
+	// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
+	// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+	if req.PrevLogTerm != rf.Log[req.PrevLogIndex-1].Term {
 		for _, pojo := range req.Entries {
 			// 删除自己本下标之后不一致的所有日志
-			for rf.Log[pojo.Index].Term != pojo.Term {
+			Error("pojo:%+v !!!!!!", pojo)
+			if rf.Log[pojo.Index-1].Term != pojo.Term {
 				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1-rf.LastIncludedIndex])))
 				rf.Log = rf.Log[:pojo.Index-1]
 			}
 		}
-
-		// todo 第四步，添加日志
-		// 4. Append any new entries not already in the log
-		for _, pojo := range req.Entries {
-			// 不要重复添加
-			if pojo.Index > len(rf.Log) {
-				// 不应该取 req 日志中的 index， 要重新弄成自己的index
-				rf.Log = append(rf.Log, LogEntry{
-					Term:    pojo.Term,
-					Index:   len(rf.Log) + 1, // index语义从1开始
-					Command: pojo.Command,
-					ID:      pojo.ID,
-				})
-				reply.HasReplica = true
-			}
-		}
-
-		// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
-		// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
-		oldCommitIndex := rf.CommitIndex
-		if req.LeaderCommitIndex > oldCommitIndex {
-			rf.CommitIndex = min(req.LeaderCommitIndex, len(rf.Log))
-		}
-
-		// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
-		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
-			rf.ApplyCh <- ApplyMsg{
-				CommandValid: true,
-				Command:      rf.Log[i].Command,
-				CommandIndex: rf.Log[i].Index,
-			}
-			rf.LastApplied = rf.CommitIndex
-		}
-
 	}
 
-	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v", rf.me, req.ServerNumber, reply.Success)
+	// todo 第四步，添加日志
+	// 4. Append any new entries not already in the log
+	for _, pojo := range req.Entries {
+		// 不要重复添加
+		if pojo.Index > len(rf.Log) {
+			// 不应该取 req 日志中的 index， 要重新弄成自己的index
+			rf.Log = append(rf.Log, LogEntry{
+				Term:    pojo.Term,
+				Index:   len(rf.Log) + 1, // index语义从1开始
+				Command: pojo.Command,
+				ID:      pojo.ID,
+			})
+			reply.HasReplica = true
+		}
+	}
+
+	// todo 设置一下 reply.MatchIndex
+	reply.MatchIndex = len(rf.Log)
+
+	// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
+	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+	oldCommitIndex := rf.CommitIndex
+	if req.LeaderCommitIndex > oldCommitIndex {
+		rf.CommitIndex = min(req.LeaderCommitIndex, len(rf.Log))
+	}
+
+	// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
+	for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
+		rf.ApplyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.Log[i].Command,
+			CommandIndex: rf.Log[i].Index,
+		}
+		rf.LastApplied = rf.CommitIndex
+	}
+
+	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为：%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
 
 }
 

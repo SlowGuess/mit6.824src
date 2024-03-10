@@ -386,10 +386,10 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 			Term:         rf.Term,
 			ServerNumber: int32(rf.me),
 
-			PrevLogIndex:      max(rf.NextIndex[index]-1, 0),
-			PrevLogTerm:       rf.Log[rf.NextIndex[index]-1].Term,
+			PrevLogIndex:      max(rf.NextIndex[index]-1, 0),      // todo 这个不用判断，因为NextIndex是从1开始的
+			PrevLogTerm:       rf.Log[rf.NextIndex[index]-1].Term, // todo 判断长度
 			LeaderCommitIndex: rf.CommitIndex,
-			Entries:           rf.Log[rf.NextIndex[index]-1:],
+			Entries:           rf.Log[rf.NextIndex[index]-1:], // todo 判断长度
 		}
 		reply := &AppendEntriesReply{}
 		go func(i int) {
@@ -464,6 +464,58 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		rf.VotedFor = req.ServerNumber
 
 		//————————————————进行日志处理
+
+		// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
+		// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
+		if 1 > 2 {
+			// todo 正确赋值 reply.MatchIndex
+			reply.Success = false
+			Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
+			return
+		}
+
+		// todo 设置一下 reply.MatchIndex
+
+		// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
+		// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
+		for _, pojo := range req.Entries {
+			// 删除自己本下标之后不一致的所有日志
+			for 1 > 2 {
+				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1-rf.LastIncludedIndex])))
+				rf.Log = rf.Log[:pojo.Index-1]
+			}
+		}
+
+		// todo 第四步，添加日志
+		// 4. Append any new entries not already in the log
+		for _, pojo := range req.Entries {
+			// 不要重复添加
+			if 1 > 2 {
+				// 不应该取 req 日志中的 index， 要重新弄成自己的index
+				rf.Log = append(rf.Log, LogEntry{
+					Term:    pojo.Term,
+					Index:   len(rf.Log) + 1, // index语义从1开始
+					Command: pojo.Command,
+					ID:      pojo.ID,
+				})
+				reply.HasReplica = true
+			}
+		}
+
+		// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
+		// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+		oldCommitIndex := rf.CommitIndex
+
+		// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
+		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
+			rf.ApplyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      rf.Log[i].Command,
+				CommandIndex: rf.Log[i].Index,
+			}
+			rf.LastApplied = rf.CommitIndex
+		}
+
 		//先检查日志一致性，比较日志的最后一个条目和leader心跳信息中携带日志条目进行比较
 		if rf.Log[req.PrevLogIndex].Term != req.PrevLogTerm {
 			//上一个任期不一致，则拒绝
@@ -480,6 +532,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		}
 
 	} else {
+		// todo 这个 else 可以放到最前面，并直接 return ， 另外可以加一条打印
 		//收到任期小于自己，包反对
 		reply.Term = rf.Term
 		reply.Success = false

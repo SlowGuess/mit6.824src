@@ -594,7 +594,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
 		for _, pojo := range req.Entries {
 			// 删除自己本下标之后不一致的所有日志
-			for rf.Log[pojo.Index-1].Term != pojo.Term {
+			for rf.Log[pojo.Index].Term != pojo.Term {
 				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1-rf.LastIncludedIndex])))
 				rf.Log = rf.Log[:pojo.Index-1]
 			}

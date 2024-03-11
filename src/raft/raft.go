@@ -256,9 +256,35 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	Trace("%+v号机器收到%+v号机器的投票请求, 自己的任期是%+v请求中的任期是%+v自己的VotedFor:%+v      LastLogIndex:%+vLastLogTerm:%+v",
+	Trace("%+v号机器收到%+v号机器的投票请求, 自己的任期是%+v请求中的任期是%+v自己的VotedFor:%+v      LastLogIndex:%+v   LastLogTerm:%+v",
 		rf.me, args.ServerNumber, rf.Term, args.Term, rf.VotedFor, args.LastLogIndex, args.LastLogTerm)
+
+	reply.Term = rf.Term
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
+	//一旦任期小都会反对
+	if args.Term < rf.Term {
+		reply.Agree = false
+		Warning("%+v号机器反对了%+v号机器选举", rf.me, args.ServerNumber)
+		return
+	}
+
+	//跟随前要判断日志是否比自己新
+	if args.LastLogIndex != 0 {
+		if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
+			//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
+			reply.Agree = false
+			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举", rf.me, args.ServerNumber)
+			return
+		}
+	} else {
+		//处理越界情况
+		if len(rf.Log) != 0 {
+			reply.Agree = false
+			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举", rf.me, args.ServerNumber)
+			return
+		}
+	}
+
 	//无论是什么身份，遇到任期比自己大的都跟随
 	if args.Term > rf.Term {
 		rf.convert2Follower(args.Term)
@@ -278,6 +304,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		//任期相等时只有follower节点没投票时才会赞成
 		if rf.Role == RoleFollower {
 			if rf.VotedFor == InitVoteFor {
+
 				reply.Term = rf.Term
 				rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 				reply.Agree = true
@@ -288,10 +315,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			}
 		}
 	}
-	//其他情况都会反对
-	reply.Term = rf.Term
-	reply.Agree = false
-	Warning("%+v号机器反对了%+v号机器选举", rf.me, args.ServerNumber)
+
 }
 
 // AsyncBatchSendRequestVote 非领导者并行发送投票请求，收到响应后进行处理
@@ -315,7 +339,13 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 		args := &RequestVoteArgs{
 			Term:         rf.Term,
 			ServerNumber: int32(rf.me),
+
+			LastLogIndex: len(rf.Log),
 		}
+		if len(rf.Log) != 0 {
+			args.LastLogTerm = rf.Log[len(rf.Log)-1].Term
+		}
+
 		reply := &RequestVoteReply{}
 		Trace("%+v号机器发送选主请求, 发给%v号,自己的信息是:%v", rf.me, index, args)
 		go func(i int) {
@@ -390,7 +420,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 	}
 
 	Info("leader：%+v 开始发送心跳，任期为：%+v", rf.me, rf.Term)
-	Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
+	//Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
 
 	for index, _ := range rf.peers {
 		if index == rf.me {
@@ -590,7 +620,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 
 	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为：%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
-	Error("%+v号机器的日志情况为：%+v", rf.me, rf.Log)
+	//Error("%+v号机器的日志情况为：%+v", rf.me, rf.Log)
 }
 
 // example code to send a RequestVote RPC to a server.
@@ -669,8 +699,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	term = int(rf.Term)
 	if rf.Role != RoleLeader {
-		return -1, -1, false
+		return index, term, false
 	}
 	//是leader
 	rf.Log = append(rf.Log, LogEntry{
@@ -679,7 +710,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		Command: command,
 		ID:      atomic.AddInt64(&GlobalID, 1),
 	})
-
+	index = len(rf.Log)
+	Warning("往%+v号机器的目录中添加了一条日志，该日志在目录中的Index为：%+v", rf.me, index)
 	return index, term, isLeader
 }
 

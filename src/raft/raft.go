@@ -433,6 +433,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 			LeaderCommitIndex: rf.CommitIndex,
 		}
 		if len(rf.Log) != 0 {
+			Error("index:%+v,  rf.NextIndex[index]-1:%+v,  rf.Log:%+v", index, rf.NextIndex[index]-1, rf.Log)
 			args.Entries = rf.Log[rf.NextIndex[index]-1:]
 		}
 		if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Log) {
@@ -461,7 +462,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 
 	//看一下任期是否比自己大，比自己大则降级跟随
 	if reply.Term > rf.Term {
-		rf.convert2Follower(args.Term)
+		rf.convert2Follower(reply.Term)
 		//此时需要重置选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 		return
@@ -470,11 +471,12 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	count := 0
 	if reply.Success {
 		for i, matchIndex := range rf.MatchIndex {
+			//Error("i:%+v,matchIndex:%+v",i,matchIndex)
 			if i == rf.me { //跳过统计自己
 				continue
 			}
 			//Error("matchIndex:%+v,reply.MatchIndex:%+v",matchIndex,reply.MatchIndex)
-			if matchIndex <= reply.MatchIndex {
+			if matchIndex >= reply.MatchIndex {
 				count++
 			}
 		}
@@ -492,11 +494,10 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 
 	//如果日志被复制超过1/2个节点的话，执行提交，这里由于跳过了自己，默认count多+1
 	//Error("count:%+v,半数:%+v",count,len(rf.peers)/2)
-	if count+1 > len(rf.peers)/2 {
+	if count+1 > len(rf.peers)/2 && rf.CommitIndex < reply.MatchIndex {
 		if rf.CommitIndex+1 <= len(rf.Log) {
 			rf.CommitIndex = max(rf.CommitIndex+1, reply.MatchIndex)
 		}
-
 	}
 	//Error("oldcommitIndex:%+v,commitIndex:%+v!!!", oldCommitIndex, rf.CommitIndex)
 	for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
@@ -673,9 +674,10 @@ func (rf *Raft) convert2Leader() {
 	rf.VotedFor = int32(rf.me)
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
 
-	//初始化leader的nextIndex数组
+	//初始化leader的nextIndex和matchIndex数组
 	for i := 0; i < len(rf.peers); i++ {
 		rf.NextIndex[i] = len(rf.Log) + 1
+		rf.MatchIndex[i] = 0
 	}
 }
 

@@ -246,20 +246,19 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 
 	reply.ServerNumber = int32(rf.me)
+	reply.Term = rf.Term
 
 	// 是自己的话直接同意并跳过
 	// todo your code
 	if int(args.ServerNumber) == rf.me {
 		reply.Agree = true
 		rf.VotedFor = int32(rf.me)
-		reply.Term = rf.Term
 		return
 	}
 
 	Trace("%+v号机器收到%+v号机器的投票请求, 自己的任期是%+v请求中的任期是%+v自己的VotedFor:%+v      LastLogIndex:%+v   LastLogTerm:%+v",
 		rf.me, args.ServerNumber, rf.Term, args.Term, rf.VotedFor, args.LastLogIndex, args.LastLogTerm)
 
-	reply.Term = rf.Term
 	// 论文原文 If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	//一旦任期小都会反对
 	if args.Term < rf.Term {
@@ -305,7 +304,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if rf.Role == RoleFollower {
 			if rf.VotedFor == InitVoteFor {
 
-				reply.Term = rf.Term
 				rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 				reply.Agree = true
 				rf.VotedFor = args.ServerNumber
@@ -462,7 +460,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	defer rf.mu.Unlock()
 
 	//看一下任期是否比自己大，比自己大则降级跟随
-	if args.Term > rf.Term {
+	if reply.Term > rf.Term {
 		rf.convert2Follower(args.Term)
 		//此时需要重置选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))

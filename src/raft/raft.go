@@ -390,6 +390,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 	}
 
 	Info("leader：%+v 开始发送心跳，任期为：%+v", rf.me, rf.Term)
+	Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
 
 	for index, _ := range rf.peers {
 		if index == rf.me {
@@ -589,7 +590,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 
 	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为：%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
-
+	Error("%+v号机器的日志情况为：%+v", rf.me, rf.Log)
 }
 
 // example code to send a RequestVote RPC to a server.

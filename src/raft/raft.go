@@ -418,7 +418,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 	}
 
 	Info("leader：%+v 开始发送心跳，任期为：%+v", rf.me, rf.Term)
-	//Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
+	Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
 
 	for index, _ := range rf.peers {
 		if index == rf.me {
@@ -554,7 +554,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 			})
 			reply.HasReplica = true
 		}
-		Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为:%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
+		Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,初始没有日志，日志复制情况为:%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
 		return
 	}
 	// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
@@ -599,7 +599,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 
 	// todo 设置一下 reply.MatchIndex
-	reply.MatchIndex = len(rf.Log)
+	reply.MatchIndex = req.PrevLogIndex + len(req.Entries)
 
 	// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
@@ -618,7 +618,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 		rf.LastApplied = rf.CommitIndex
 	}
 
-	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为：%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica)
+	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为：%+v，自己的日志信息是:%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica, rf.Log)
 	//Error("%+v号机器的日志情况为：%+v", rf.me, rf.Log)
 }
 
@@ -674,7 +674,7 @@ func (rf *Raft) convert2Leader() {
 	rf.VotedFor = int32(rf.me)
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
 
-	//初始化leader的nextIndex和matchIndex数组
+	//初始化leader的nextIndex 和 matchIndex数组
 	for i := 0; i < len(rf.peers); i++ {
 		rf.NextIndex[i] = len(rf.Log) + 1
 		rf.MatchIndex[i] = 0

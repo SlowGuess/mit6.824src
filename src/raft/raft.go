@@ -139,7 +139,8 @@ var GlobalID = int64(100)
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	var term int
 	var isleader bool
 	// Your code here (2A).
@@ -168,6 +169,8 @@ func (rf *Raft) persist() {
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
@@ -189,7 +192,8 @@ func (rf *Raft) readPersist(data []byte) {
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// Your code here (2D).
 
 	return true
@@ -200,6 +204,8 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	// Your code here (2D).
 
 }
@@ -289,6 +295,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.convert2Follower(args.Term)
 		reply.Term = rf.Term
 
+		Error("这里有问题,下面就不走了！！！！")
 		//注意这里需要重置自己的选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 
@@ -345,7 +352,7 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 		}
 
 		reply := &RequestVoteReply{}
-		Trace("%+v号机器发送选主请求, 发给%v号,自己的信息是:%v", rf.me, index, args)
+		Trace("%+v号机器发送选主请求, 发给%v号,自己的信息是:%v", rf.me, index, *args)
 		go func(i int) {
 			if flag := rf.sendRequestVote(i, args, reply); !flag {
 				//  网络原因，需要重发，这里先不实现
@@ -418,7 +425,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 	}
 
 	Info("leader：%+v 开始发送心跳，任期为：%+v", rf.me, rf.Term)
-	Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
+	//Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
 
 	for index, _ := range rf.peers {
 		if index == rf.me {
@@ -433,7 +440,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 			LeaderCommitIndex: rf.CommitIndex,
 		}
 		if len(rf.Log) != 0 {
-			Error("index:%+v,  rf.NextIndex[index]-1:%+v,  rf.Log:%+v", index, rf.NextIndex[index]-1, rf.Log)
+			//Error("index:%+v,  rf.NextIndex[index]-1:%+v,  rf.Log:%+v", index, rf.NextIndex[index]-1, rf.Log)
 			args.Entries = rf.Log[rf.NextIndex[index]-1:]
 		}
 		if args.PrevLogIndex != 0 && args.PrevLogIndex <= len(rf.Log) {
@@ -707,13 +714,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
-	term = int(rf.Term)
-	if rf.Role != RoleLeader {
+	term, isLeader = rf.GetState()
+	if !isLeader {
 		return index, term, false
 	}
 	//是leader
 	rf.Log = append(rf.Log, LogEntry{
-		Term:    rf.Term,
+		Term:    int64(term),
 		Index:   len(rf.Log) + 1,
 		Command: command,
 		ID:      atomic.AddInt64(&GlobalID, 1),

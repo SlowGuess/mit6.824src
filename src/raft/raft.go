@@ -272,14 +272,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
 			//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
 			reply.Agree = false
-			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举", rf.me, args.ServerNumber)
+			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
 			return
 		}
 	} else {
 		//处理越界情况
 		if len(rf.Log) != 0 {
 			reply.Agree = false
-			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举", rf.me, args.ServerNumber)
+			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
 			return
 		}
 	}
@@ -664,6 +664,8 @@ func (rf *Raft) sendRPCAppendEntriesRequest(server int, req *AppendEntriesReques
 
 // 转换为 follower 用的函数
 func (rf *Raft) convert2Follower(term int64) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	rf.Role = RoleFollower
 	rf.Term = term
 	rf.VotedFor = InitVoteFor
@@ -672,6 +674,8 @@ func (rf *Raft) convert2Follower(term int64) {
 
 // 转换为 leader 用的函数
 func (rf *Raft) convert2Leader() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	rf.Role = RoleLeader
 	rf.VotedFor = int32(rf.me)
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
@@ -696,6 +700,8 @@ func (rf *Raft) convert2Leader() {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	index := -1
 	term := -1
 	isLeader := true

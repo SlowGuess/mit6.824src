@@ -571,10 +571,11 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 
 	// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
 	// 3. If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it (§5.3)
-	if req.PrevLogTerm != rf.Log[req.PrevLogIndex-1].Term {
-		for _, pojo := range req.Entries {
-			// 删除自己本下标之后不一致的所有日志
-			Error("pojo:%+v !!!!!!", pojo)
+	//if req.PrevLogTerm != rf.Log[req.PrevLogIndex-1].Term {
+	for _, pojo := range req.Entries {
+		// 删除自己本下标之后不一致的所有日志
+		Error("pojo:%+v !!!!!!", pojo)
+		if pojo.Index <= len(rf.Log) {
 			if rf.Log[pojo.Index-1].Term != pojo.Term {
 				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1-rf.LastIncludedIndex])))
 				rf.Log = rf.Log[:pojo.Index-1]

@@ -703,8 +703,8 @@ func (rf *Raft) convert2Leader() {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	//rf.mu.Lock()
-	//defer rf.mu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	index := -1
 	term := -1

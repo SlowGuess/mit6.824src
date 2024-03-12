@@ -139,8 +139,8 @@ var GlobalID = int64(100)
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
 	var term int
 	var isleader bool
 	// Your code here (2A).
@@ -295,7 +295,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.convert2Follower(args.Term)
 		reply.Term = rf.Term
 
-		Error("这里有问题,下面就不走了！！！！")
 		//注意这里需要重置自己的选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 

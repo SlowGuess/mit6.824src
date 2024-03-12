@@ -505,7 +505,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		rf.ApplyCh <- ApplyMsg{
 			CommandValid: true,
 			Command:      rf.Log[i].Command,
-			CommandIndex: rf.CommitIndex,
+			CommandIndex: rf.Log[i].Index,
 		}
 	}
 

@@ -125,7 +125,7 @@ const (
 	InitVoteFor   = -1 // 初始化投票为空
 	InitTerm      = 1  // 初始化任期
 	//BaseRPCCyclePeriod 一轮rpc周期基线，在论文中有推荐的值，每个实例在这个基础上新增 0~ RPCRandomPeriod 毫秒的随机值
-	BaseRPCCyclePeriod = 20 * time.Millisecond
+	BaseRPCCyclePeriod = 50 * time.Millisecond
 	// BaseElectionCyclePeriod 一轮选举周期基线，在论文中有推荐的值，每个实例在这个基础上新增 0~ ElectionRandomPeriod 毫秒的随机值
 	BaseElectionCyclePeriod = 200 * time.Millisecond
 
@@ -705,6 +705,7 @@ func (rf *Raft) convert2Leader() {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	//rf.mu.Lock()
 	//defer rf.mu.Unlock()
+
 	index := -1
 	term := -1
 	isLeader := true

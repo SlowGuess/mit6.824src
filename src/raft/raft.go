@@ -671,8 +671,6 @@ func (rf *Raft) sendRPCAppendEntriesRequest(server int, req *AppendEntriesReques
 
 // 转换为 follower 用的函数
 func (rf *Raft) convert2Follower(term int64) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.Role = RoleFollower
 	rf.Term = term
 	rf.VotedFor = InitVoteFor
@@ -681,8 +679,6 @@ func (rf *Raft) convert2Follower(term int64) {
 
 // 转换为 leader 用的函数
 func (rf *Raft) convert2Leader() {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	rf.Role = RoleLeader
 	rf.VotedFor = int32(rf.me)
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
@@ -707,8 +703,8 @@ func (rf *Raft) convert2Leader() {
 // term. the third return value is true if this server believes it is
 // the leader.
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	//rf.mu.Lock()
+	//defer rf.mu.Unlock()
 	index := -1
 	term := -1
 	isLeader := true

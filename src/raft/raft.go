@@ -561,7 +561,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if req.PrevLogIndex > len(rf.Log) || rf.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
 		// todo 正确赋值 reply.MatchIndex
-		reply.MatchIndex = len(rf.Log)
+		reply.MatchIndex = req.PrevLogIndex - 1
 
 		reply.Success = false
 		reply.HasReplica = false
@@ -579,6 +579,7 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 			if rf.Log[pojo.Index-1].Term != pojo.Term {
 				Warning(fmt.Sprint(rf.me, "机器丢弃日志，因为ld心跳中的日志", ",值为", rf.CommitIndex, fmt.Sprintf(" reply:%+v 丢弃的Log是%+v", *reply, rf.Log[pojo.Index-1-rf.LastIncludedIndex])))
 				rf.Log = rf.Log[:pojo.Index-1]
+				Warning("%+v修改后的日志信息为:%+v", rf.me, rf.Log)
 			}
 		}
 	}

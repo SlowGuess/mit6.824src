@@ -130,7 +130,7 @@ const (
 	BaseElectionCyclePeriod = 300 * time.Millisecond
 
 	RPCRandomPeriod      = 10
-	ElectionRandomPeriod = 100
+	ElectionRandomPeriod = 450
 )
 
 // GlobalID 全局自增ID，需要原子性自增，用于debug
@@ -305,11 +305,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
 		return
 	}
+
 	if args.Term == rf.Term {
-		//任期相等时只有follower节点没投票时才会赞成
-
+		//任期相等时只有follower节点没投票时才会赞成(动画逻辑)
+		//任期相等时无论follower还是candidate都可投票
+		//if rf.Role == RoleFollower{
 		if rf.VotedFor == InitVoteFor || rf.VotedFor == args.ServerNumber {
-
 			rf.Role = RoleFollower
 			rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 			reply.Agree = true
@@ -318,6 +319,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
 			return
 		}
+		//}
 	}
 
 }

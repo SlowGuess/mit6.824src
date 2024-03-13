@@ -125,9 +125,9 @@ const (
 	InitVoteFor   = -1 // 初始化投票为空
 	InitTerm      = 1  // 初始化任期
 	//BaseRPCCyclePeriod 一轮rpc周期基线，在论文中有推荐的值，每个实例在这个基础上新增 0~ RPCRandomPeriod 毫秒的随机值
-	BaseRPCCyclePeriod = 50 * time.Millisecond
+	BaseRPCCyclePeriod = 40 * time.Millisecond
 	// BaseElectionCyclePeriod 一轮选举周期基线，在论文中有推荐的值，每个实例在这个基础上新增 0~ ElectionRandomPeriod 毫秒的随机值
-	BaseElectionCyclePeriod = 200 * time.Millisecond
+	BaseElectionCyclePeriod = 300 * time.Millisecond
 
 	RPCRandomPeriod      = 10
 	ElectionRandomPeriod = 100
@@ -307,16 +307,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 	if args.Term == rf.Term {
 		//任期相等时只有follower节点没投票时才会赞成
-		if rf.Role == RoleFollower {
-			if rf.VotedFor == InitVoteFor {
 
-				rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
-				reply.Agree = true
-				rf.VotedFor = args.ServerNumber
+		if rf.VotedFor == InitVoteFor || rf.VotedFor == args.ServerNumber {
 
-				Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
-				return
-			}
+			rf.Role = RoleFollower
+			rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
+			reply.Agree = true
+			rf.VotedFor = args.ServerNumber
+
+			Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
+			return
 		}
 	}
 
@@ -536,11 +536,13 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 
 	//收到任期大于等于自己，则都选择跟随，这里2A实验 candidate与follower情况相同，不作分类,在之后实验可能需要修改
-	rf.convert2Follower(req.Term)
+	if rf.Term < req.Term {
+		rf.convert2Follower(req.Term)
+	}
+	// 之后一定是  req.Term == rf.Term
+	rf.Role = RoleFollower
+	rf.RequestVoteTimeTicker.Reset(rf.RequestVoteDuration)
 	reply.Term = rf.Term
-
-	//注意这里需要重置自己的选举计时器
-	rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 
 	//回应心跳
 	reply.Success = true
@@ -567,8 +569,8 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
 	if req.PrevLogIndex > len(rf.Log) || rf.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
 		// todo 正确赋值 reply.MatchIndex
-		reply.MatchIndex = req.PrevLogIndex - 1
-
+		//reply.MatchIndex = req.PrevLogIndex - 1
+		reply.MatchIndex = rf.CommitIndex
 		reply.Success = false
 		reply.HasReplica = false
 		Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
@@ -804,6 +806,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	rf.RequestVoteTimeTicker = time.NewTicker(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 	rf.RequestAppendEntriesTimeTicker = time.NewTicker(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
+
+	rf.RequestVoteDuration = BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod))*time.Millisecond
+	rf.RequestAppendEntriesDuration = BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod))*time.Millisecond
 
 	rf.NextIndex = make([]int, len(rf.peers))
 	rf.MatchIndex = make([]int, len(rf.peers))

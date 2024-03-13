@@ -130,7 +130,7 @@ const (
 	BaseElectionCyclePeriod = 300 * time.Millisecond
 
 	RPCRandomPeriod      = 10
-	ElectionRandomPeriod = 450
+	ElectionRandomPeriod = 100
 )
 
 // GlobalID 全局自增ID，需要原子性自增，用于debug
@@ -273,27 +273,27 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	//跟随前要判断日志是否比自己新
-	if args.LastLogIndex != 0 {
-		if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
-			//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
-			reply.Agree = false
-			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
-			return
-		}
-	} else {
-		//处理越界情况
-		if len(rf.Log) != 0 {
-			reply.Agree = false
-			Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
-			return
-		}
-	}
-
 	//无论是什么身份，遇到任期比自己大的都跟随
 	if args.Term > rf.Term {
 		rf.convert2Follower(args.Term)
 		reply.Term = rf.Term
+
+		//跟随前要判断日志是否比自己新
+		if args.LastLogIndex != 0 {
+			if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
+				//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
+				reply.Agree = false
+				Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
+				return
+			}
+		} else {
+			//处理越界情况
+			if len(rf.Log) != 0 {
+				reply.Agree = false
+				Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
+				return
+			}
+		}
 
 		//注意这里需要重置自己的选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
@@ -309,9 +309,27 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term == rf.Term {
 		//任期相等时只有follower节点没投票时才会赞成(动画逻辑)
 		//任期相等时无论follower还是candidate都可投票
-		//if rf.Role == RoleFollower{
+		//if rf.Role == RoleFollower {
 		if rf.VotedFor == InitVoteFor || rf.VotedFor == args.ServerNumber {
 			rf.Role = RoleFollower
+
+			//跟随前要判断日志是否比自己新
+			if args.LastLogIndex != 0 {
+				if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
+					//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
+					reply.Agree = false
+					Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
+					return
+				}
+			} else {
+				//处理越界情况
+				if len(rf.Log) != 0 {
+					reply.Agree = false
+					Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
+					return
+				}
+			}
+
 			rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
 			reply.Agree = true
 			rf.VotedFor = args.ServerNumber
@@ -319,8 +337,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			Success("%+v号机器赞成了%+v号机器选举", rf.me, args.ServerNumber)
 			return
 		}
-		//}
 	}
+	//}
 
 }
 

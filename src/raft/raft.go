@@ -167,6 +167,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.Term)
 	e.Encode(rf.VotedFor)
 	e.Encode(rf.Log)
+	e.Encode(rf.CommitIndex)
 
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
@@ -185,6 +186,7 @@ func (rf *Raft) readPersist(data []byte) {
 	d.Decode(&rf.Term)
 	d.Decode(&rf.VotedFor)
 	d.Decode(&rf.Log)
+	d.Decode(&rf.CommitIndex)
 
 	Info("%d号机器恢复信息成功!!!", rf.me)
 
@@ -504,6 +506,10 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 
 	count := 0
 	if reply.Success {
+		//处理matchIndex和nextIndex
+		rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
+		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
+
 		for i, matchIndex := range rf.MatchIndex {
 			//Error("i:%+v,matchIndex:%+v",i,matchIndex)
 			if i == rf.me { //跳过统计自己
@@ -514,9 +520,6 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 				count++
 			}
 		}
-		//处理matchIndex和nextIndex
-		rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
-		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
 
 	} else if rf.Term == reply.Term {
 		// 如果leader发送的 AppendEntries 因为日志不一致而失败，减少 nextIndex 并重试. 根据follower的实现中，失败原因只有两种，一个是term不一致一个是日志不一致
@@ -539,6 +542,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		commitFlag = true
 	}
 
+	// 提交限制判断
 	if len(rf.Log) != 0 && reply.MatchIndex != 0 && rf.Log[reply.MatchIndex-1].Term != rf.Term {
 		Error("%+v号leader由于提交限制无法提交", rf.me)
 		return
@@ -548,12 +552,13 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	if commitFlag {
 		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
 			//if 需要提交的时候
+			Error("%+v号leader提交日志成功,提交到index为:%+v", rf.me, rf.CommitIndex)
 			rf.ApplyCh <- ApplyMsg{
 				CommandValid: true,
 				Command:      rf.Log[i].Command,
 				CommandIndex: rf.Log[i].Index,
 			}
-			Error("%+v号leader提交日志成功,提交到index为:%+v", rf.me, rf.CommitIndex)
+
 		}
 	}
 

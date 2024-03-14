@@ -18,6 +18,8 @@ package raft
 //
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"fmt"
 	rand2 "math/rand"
 
@@ -159,34 +161,33 @@ func (rf *Raft) GetState() (int, bool) {
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	e.Encode(rf.Term)
+	e.Encode(rf.VotedFor)
+	e.Encode(rf.Log)
+
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
 func (rf *Raft) readPersist(data []byte) {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
 	// Your code here (2C).
 	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+
+	d.Decode(&rf.Term)
+	d.Decode(&rf.VotedFor)
+	d.Decode(&rf.Log)
+
+	Info("%d号机器恢复信息成功!!!", rf.me)
+
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -250,6 +251,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	reply.ServerNumber = int32(rf.me)
 	reply.Term = rf.Term
@@ -387,6 +389,7 @@ func (rf *Raft) AsyncBatchSendRequestVote() {
 func (rf *Raft) HandleRequestVoteResp(req *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower (§5.1)
 	if reply.Term > rf.Term {
@@ -444,7 +447,7 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 	}
 
 	Info("leader：%+v 开始发送心跳，任期为：%+v", rf.me, rf.Term)
-	//Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
+	Error("%+v号leader的日志情况为：%+v", rf.me, rf.Log)
 
 	for index, _ := range rf.peers {
 		if index == rf.me {
@@ -485,12 +488,17 @@ func (rf *Raft) AsyncBatchSendRequestAppendEntries() {
 func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	//看一下任期是否比自己大，比自己大则降级跟随
 	if reply.Term > rf.Term {
 		rf.convert2Follower(reply.Term)
 		//此时需要重置选举计时器
 		rf.RequestVoteTimeTicker.Reset(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
+		return
+	}
+
+	if rf.Role != RoleLeader {
 		return
 	}
 
@@ -510,12 +518,16 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
 		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
 
-	} else {
+	} else if rf.Term == reply.Term {
+		// 如果leader发送的 AppendEntries 因为日志不一致而失败，减少 nextIndex 并重试. 根据follower的实现中，失败原因只有两种，一个是term不一致一个是日志不一致
+		oldNextIndex := rf.NextIndex[reply.ServerNumber]
 		//错误处理,nextIndex指针回退一格（可优化如二分查找，这里简单实现）
+		rf.NextIndex[reply.ServerNumber] = max(1, reply.MatchIndex+1)
 		rf.MatchIndex[reply.ServerNumber] = reply.MatchIndex
-		rf.NextIndex[reply.ServerNumber] = reply.MatchIndex + 1
+		Warning(fmt.Sprint(rf.me, "号ld减少%d号机器的nextIndex从", oldNextIndex, "到", rf.NextIndex[reply.ServerNumber], " reply.MatchIndex:", reply.MatchIndex), reply.ServerNumber)
 	}
 
+	commitFlag := false
 	oldCommitIndex := rf.CommitIndex
 
 	//如果日志被复制超过1/2个节点的话，执行提交，这里由于跳过了自己，默认count多+1
@@ -524,14 +536,24 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 		if rf.CommitIndex+1 <= len(rf.Log) {
 			rf.CommitIndex = max(rf.CommitIndex+1, reply.MatchIndex)
 		}
+		commitFlag = true
 	}
+
+	if len(rf.Log) != 0 && rf.Log[len(rf.Log)-1].Term != rf.Term {
+		Error("%+v号leader由于提交限制无法提交", rf.me)
+		return
+	}
+
 	//Error("oldcommitIndex:%+v,commitIndex:%+v!!!", oldCommitIndex, rf.CommitIndex)
-	for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
-		//if 需要提交的时候
-		rf.ApplyCh <- ApplyMsg{
-			CommandValid: true,
-			Command:      rf.Log[i].Command,
-			CommandIndex: rf.Log[i].Index,
+	if commitFlag {
+		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
+			//if 需要提交的时候
+			rf.ApplyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      rf.Log[i].Command,
+				CommandIndex: rf.Log[i].Index,
+			}
+			Error("%+v号leader提交日志成功,提交到index为:%+v", rf.me, rf.CommitIndex)
 		}
 	}
 
@@ -541,6 +563,7 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	reply.ServerNumber = int32(rf.me)
 	Trace("%+v号机器收到%+v号机器的心跳信息, 自己的任期是%+v请求中的任期是%+v自己的VotedFor%+v,日志信息为:%+v", rf.me, req.ServerNumber, rf.Term, req.Term, rf.VotedFor, *req)
@@ -587,14 +610,16 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 	}
 	// todo 第二步：如果自己日志的此下标没有，或者任期和预期的不一样，返回false
 	// 2. Reply false if log doesn’t contain an entry at prevLogIndex whose term matches prevLogTerm (§5.3)
-	if req.PrevLogIndex > len(rf.Log) || rf.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
-		// todo 正确赋值 reply.MatchIndex
-		//reply.MatchIndex = req.PrevLogIndex - 1
-		reply.MatchIndex = rf.CommitIndex
-		reply.Success = false
-		reply.HasReplica = false
-		Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
-		return
+	if req.PrevLogIndex != 0 {
+		if req.PrevLogIndex > len(rf.Log) || rf.Log[req.PrevLogIndex-1].Term != req.PrevLogTerm {
+			// todo 正确赋值 reply.MatchIndex
+			//reply.MatchIndex = req.PrevLogIndex - 1
+			reply.MatchIndex = rf.CommitIndex
+			reply.Success = false
+			reply.HasReplica = false
+			Warning(fmt.Sprint(rf.me, "机器收到", req.ServerNumber, "的心跳【发生日志冲突】", " CommitIndex:", rf.CommitIndex, fmt.Sprintf(" req:%+v reply:%+v Log:%+v", *req, *reply, rf.Log)))
+			return
+		}
 	}
 
 	// todo 第三步：如果自己的日志和req中的发生任期冲突，删除所有已有的index之后的
@@ -633,19 +658,22 @@ func (rf *Raft) AppendEntries(req *AppendEntriesRequest, reply *AppendEntriesRep
 
 	// todo 第五步 如果req中leaderCommit > 自己的commitIndex，令 commitIndex 等于 leaderCommit 和最后一个新日志记录的 index 值之间的最小值
 	// 5. If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+	commitIndexUpdate := req.LeaderCommitIndex > rf.CommitIndex && len(rf.Log) != 0
 	oldCommitIndex := rf.CommitIndex
-	if req.LeaderCommitIndex > oldCommitIndex {
-		rf.CommitIndex = min(req.LeaderCommitIndex, len(rf.Log))
+	if commitIndexUpdate {
+		rf.CommitIndex = min(req.LeaderCommitIndex, rf.Log[len(rf.Log)-1].Index)
 	}
 
 	// todo 第六步，当 CommitIndex 更新时，相当于提交，需要给检测程序发送
-	for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
-		rf.ApplyCh <- ApplyMsg{
-			CommandValid: true,
-			Command:      rf.Log[i].Command,
-			CommandIndex: rf.Log[i].Index,
+	if commitIndexUpdate {
+		for i := oldCommitIndex; i <= rf.CommitIndex-1; i++ {
+			rf.ApplyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      rf.Log[i].Command,
+				CommandIndex: rf.Log[i].Index,
+			}
+			rf.LastApplied = rf.CommitIndex
 		}
-		rf.LastApplied = rf.CommitIndex
 	}
 
 	Success("%+v号机器回复%+v号机器发出的心跳，结果是:%+v,日志复制情况为：%+v，自己的日志信息是:%+v", rf.me, req.ServerNumber, reply.Success, reply.HasReplica, rf.Log)
@@ -706,7 +734,7 @@ func (rf *Raft) convert2Leader() {
 
 	//初始化leader的nextIndex 和 matchIndex数组
 	for i := 0; i < len(rf.peers); i++ {
-		rf.NextIndex[i] = len(rf.Log) + 1
+		rf.NextIndex[i] = rf.CommitIndex + 1
 		rf.MatchIndex[i] = 0
 	}
 }
@@ -726,6 +754,7 @@ func (rf *Raft) convert2Leader() {
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	defer rf.persist()
 
 	index := -1
 	term := -1
@@ -823,21 +852,21 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.VotedFor = InitVoteFor
 	rf.ApplyCh = applyCh
 	rf.PeersVoteGranted = make([]bool, len(rf.peers))
-
-	rf.RequestVoteTimeTicker = time.NewTicker(BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod)*int(time.Millisecond)))
-	rf.RequestAppendEntriesTimeTicker = time.NewTicker(BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod)*int(time.Millisecond)))
+	rf.PeersVoteGranted[rf.me] = true
 
 	rf.RequestVoteDuration = BaseElectionCyclePeriod + time.Duration(rand2.Intn(ElectionRandomPeriod))*time.Millisecond
 	rf.RequestAppendEntriesDuration = BaseRPCCyclePeriod + time.Duration(rand2.Intn(RPCRandomPeriod))*time.Millisecond
 
+	rf.RequestVoteTimeTicker = time.NewTicker(rf.RequestVoteDuration)
+	rf.RequestAppendEntriesTimeTicker = time.NewTicker(rf.RequestAppendEntriesDuration)
+
+	rf.Log = []LogEntry{}
 	rf.NextIndex = make([]int, len(rf.peers))
 	rf.MatchIndex = make([]int, len(rf.peers))
 	for i := 0; i < len(rf.peers); i++ {
-		rf.NextIndex[i] = 1
+		rf.NextIndex[i] = rf.CommitIndex + 1
 		rf.MatchIndex[i] = 0
 	}
-	rf.CommitIndex = 0
-	rf.Log = []LogEntry{}
 
 	fmt.Println(rf.me, "号机器的选举循环周期是", rf.RequestVoteDuration.Milliseconds(),
 		"毫秒", "  rpc周期是", rf.RequestAppendEntriesDuration.Milliseconds(), "毫秒")

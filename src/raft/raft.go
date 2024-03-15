@@ -533,6 +533,12 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 	commitFlag := false
 	oldCommitIndex := rf.CommitIndex
 
+	// 提交限制判断
+	if len(rf.Log) != 0 && reply.MatchIndex != 0 && rf.Log[reply.MatchIndex-1].Term != rf.Term {
+		Error("%+v号leader由于提交限制无法提交", rf.me)
+		return
+	}
+
 	//如果日志被复制超过1/2个节点的话，执行提交，这里由于跳过了自己，默认count多+1
 	Error("count:%+v,半数:%+v,reply.MatchIndex:%+v", count, len(rf.peers)/2, reply.MatchIndex)
 	if count+1 > len(rf.peers)/2 && rf.CommitIndex < reply.MatchIndex {
@@ -540,12 +546,6 @@ func (rf *Raft) HandleAppendEntriesResp(args *AppendEntriesRequest, reply *Appen
 			rf.CommitIndex = max(rf.CommitIndex+1, reply.MatchIndex)
 		}
 		commitFlag = true
-	}
-
-	// 提交限制判断
-	if len(rf.Log) != 0 && reply.MatchIndex != 0 && rf.Log[reply.MatchIndex-1].Term != rf.Term {
-		Error("%+v号leader由于提交限制无法提交", rf.me)
-		return
 	}
 
 	Error("oldcommitIndex:%+v,commitIndex:%+v!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", oldCommitIndex, rf.CommitIndex)

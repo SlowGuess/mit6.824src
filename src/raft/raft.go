@@ -284,11 +284,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 		//跟随前要判断日志是否比自己新
 		if args.LastLogIndex != 0 {
-			if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
-				//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
-				reply.Agree = false
-				Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
-				return
+			if len(rf.Log) != 0 {
+				if (rf.Log[len(rf.Log)-1].Term > args.LastLogTerm) || (rf.Log[len(rf.Log)-1].Term == args.LastLogTerm && rf.Log[len(rf.Log)-1].Index > args.LastLogIndex) {
+					//如果leader最后一条日志的任期比自己小，或任期相同但索引比自己小，则自己的日志新，拒绝跟随
+					reply.Agree = false
+					Warning("%+v号机器因【日志比leader新】反对了%+v号机器选举,自己的日志是%+v", rf.me, args.ServerNumber, rf.Log)
+					return
+				}
 			}
 		} else {
 			//处理越界情况
